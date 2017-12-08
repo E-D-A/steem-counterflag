@@ -13,3 +13,7 @@ botname = 'STEEMIT-ACCOUNT'
 ## Run:
 
 python3 vote.py steemit-URL
+
+## Logging:
+
+Logs will be written to vote.log as well printed to stdout.
