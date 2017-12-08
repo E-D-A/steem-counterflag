@@ -1,9 +1,10 @@
 import time
 import sys
-from subprocess import call
+import logging
 from steem import Steem
 from steem.post import Post
 from steem.account import Account
+from steem.amount import Amount
 from steem.converter import Converter
 from steembase.exceptions import PostDoesNotExist
 
@@ -11,20 +12,30 @@ from steembase.exceptions import PostDoesNotExist
 # *** The account's posting key need to exist in your Steempy wallet ***
 botname = 'STEEMIT-ACCOUNT'
 
+# Initializing steem-python objects
 steem = Steem()
 bot = Account(botname)
+
+# Setup logging
+logger = logging.getLogger('counterflag')
+logger.setLevel(logging.INFO)
+handler = logging.FileHandler('vote.log', encoding='utf-8')
+handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s: %(message)s'))
+logger.addHandler(handler)
 
 # Used for conversion of steemit timestamp
 pattern = '%Y-%m-%dT%H:%M:%S'
 
 # Main function
 def countervote(post):
+    logger.info('Starting countervote for: ' + post.url)
     total = 0
     # Loop through all votes
     for vote in post.active_votes:
         # Check if the bot already voted
         if(vote['voter'] == botname):
             print('Already voted on this post.')
+            logger.info('Already voted on this post.')
             total = 0
             break
         # Calculate the value of the flag and store it
@@ -37,6 +48,7 @@ def countervote(post):
     # If there are flags, calculate the counter vote
     if(total < 0):
         print('Total downvoted value: $ ' + str(total) + '\n')
+        logger.info('Total downvoted value: $ ' + str(total))
         VP = getactiveVP(bot)
         SP = calculateSP(bot)
         VW = round(getvoteweight(SP, abs(total), VP),4)
@@ -46,19 +58,25 @@ def countervote(post):
         print('Voting with ' + str(VW) + '% to try to counter the vote.')
         counterValue = round(getvotevalue(SP, VP, VW),4)
         print('Counter vote value comes to: $ ' + str(counterValue))
+        logger.info('Voting with ' + str(VW) + '% with a value of: $ ' + str(counterValue))
 
         # Perform the vote
-        t = call(["steempy", "upvote", "--account", botname, "--weight", str(VW), str(url)])
-        if(t == 0):
-            print('Successfully voted!')
+        try:
+            post.upvote(weight=VW, voter=botname)
+        except Exception:
+            print('Failed to vote!')
+            logger.error('Failed to vote!')
         else:
-            print('Failed to vote!!')
-
+            print('Successfully voted')
+            logger.info('Successfully voted')
+    else:
+        print('Done.')
+        logger.info('Done.')
 
 # Get the current upvote value based on rshares
 def getrsharesvalue(rshares):
     conv = Converter()
-    rew_bal = float(steem.steemd.get_reward_fund()['reward_balance'].rstrip(' STEEM'))
+    rew_bal = float(Amount(steem.steemd.get_reward_fund()['reward_balance']).amount)
     rec_claim = float(steem.steemd.get_reward_fund()['recent_claims'])
     steemvalue = rshares * rew_bal / rec_claim
     return conv.steem_to_sbd(steemvalue)
@@ -87,37 +105,39 @@ def getactiveVP(account):
 
 # Calculates the value of a vote
 def getvotevalue(SP, VotingPower, VotingWeight):
-    POWER = SP / (float(steem.steemd.get_dynamic_global_properties()['total_vesting_fund_steem'].rstrip(' STEEM')) \
+    POWER = SP / (float(Amount(steem.steemd.get_dynamic_global_properties()['total_vesting_fund_steem']).amount) \
         / float(steem.steemd.get_dynamic_global_properties()['total_vesting_shares'].rstrip(' VESTS')))
     VOTING = ((100 * VotingPower * (100 * VotingWeight) / 10000) + 49) / 50
-    REW = float(steem.steemd.get_reward_fund()['reward_balance'].rstrip(' STEEM')) \
+    REW = float(Amount(steem.steemd.get_reward_fund()['reward_balance']).amount) \
         / float(steem.steemd.get_reward_fund()['recent_claims'])
-    PRICE = float(steem.steemd.get_current_median_history_price()['base'].rstrip(' SBD')) \
-        / float(steem.steemd.get_current_median_history_price()['quote'].rstrip(' STEEM'))
+    PRICE = float(Amount(steem.steemd.get_current_median_history_price()['base']).amount) \
+        / float(Amount(steem.steemd.get_current_median_history_price()['quote']).amount)
     VoteValue = (POWER * VOTING * 100) * REW * PRICE
     return VoteValue
 
 # Calculates the voting weight
 def getvoteweight(SP, VoteValue, VotingPower):
-    POWER = SP / (float(steem.steemd.get_dynamic_global_properties()['total_vesting_fund_steem'].rstrip(' STEEM')) \
+    POWER = SP / (float(Amount(steem.steemd.get_dynamic_global_properties()['total_vesting_fund_steem']).amount) \
         / float(steem.steemd.get_dynamic_global_properties()['total_vesting_shares'].rstrip(' VESTS')))
-    REW = float(steem.steemd.get_reward_fund()['reward_balance'].rstrip(' STEEM')) \
+    REW = float(Amount(steem.steemd.get_reward_fund()['reward_balance']).amount) \
         / float(steem.steemd.get_reward_fund()['recent_claims'])
-    PRICE = float(steem.steemd.get_current_median_history_price()['base'].rstrip(' SBD')) \
-        / float(steem.steemd.get_current_median_history_price()['quote'].rstrip(' STEEM'))
+    PRICE = float(Amount(steem.steemd.get_current_median_history_price()['base']).amount) \
+        / float(Amount(steem.steemd.get_current_median_history_price()['quote']).amount)
     VOTING = VoteValue / (POWER * 100 * REW * PRICE)
     VotingWeight = ((VOTING * 50 - 49) * 10000) / (100 * 100 * VotingPower)
     return VotingWeight
 
-# Check for a valid Steemit URL and call the main function countervote()
-try:
-    url = sys.argv[1]
-    post = Post(url)
-except IndexError:
-    print('Please input a Steemit URL')
-except ValueError:
-    print('Please input a Steemit URL')
-except PostDoesNotExist:
-    print('That is not a valid Steemit URL')
-else:
-    countervote(post)
+# Only run this part if the script is run by itself
+if __name__ == '__main__':
+    # Check for a valid Steemit URL and call the main function countervote()
+    try:
+        url = sys.argv[1]
+        post = Post(url)
+    except IndexError:
+        print('Please input a Steemit URL')
+    except ValueError:
+        print('Please input a Steemit URL')
+    except PostDoesNotExist:
+        print('That is not a valid Steemit URL')
+    else:
+        countervote(post)
